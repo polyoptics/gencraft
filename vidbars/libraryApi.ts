@@ -16,6 +16,7 @@
 //   GET /api/library/light?f=&v=               one project's light copy
 //   GET /api/library/blob?f=&v=&o=&n=&t=       one picture's bytes
 //   GET /api/library/cards?f=&v=&ids=a,b       those cards, whole, to bring in
+//                                              (or POST, with {ids} as the body)
 //
 // OTHER FOLDERS (Brian 2026-11-24: "If I just copy stuff over and throw it
 // somewhere, I should be able to point the card browser at a directory
@@ -396,9 +397,15 @@ export function libraryApi(): Plugin {
       server.middlewares.use('/api/library/cards', (req, res) => {
         const q = query(req)
         const f = resolve(q)
-        const ids = new Set((q.get('ids') ?? '').split(',').filter(Boolean))
-        if (!f || ids.size === 0) return json(res, 404, { error: 'Not found' })
-        try {
+        if (!f) return json(res, 404, { error: 'Not found' })
+        // Many cards at once (a card and all the cards linked to it) are
+        // named in the body: too long a list for an address.
+        const named: Promise<string[]> = req.method === 'POST'
+          ? body(req, 1_000_000).then(raw => (JSON.parse(raw.toString('utf-8')) as { ids?: unknown }).ids).then(x => Array.isArray(x) ? x.filter((i): i is string => typeof i === 'string') : [])
+          : Promise.resolve((q.get('ids') ?? '').split(',').filter(Boolean))
+        void named.then(list => {
+          const ids = new Set(list)
+          if (ids.size === 0) return json(res, 404, { error: 'Not found' })
           const doc = wholeDoc(f.abs, f.st)
           const boards = boardsOf(doc)
           const groups = ((doc.groups as GroupLike[] | undefined) ?? []).filter(g => g && ids.has(g.id))
@@ -416,7 +423,7 @@ export function libraryApi(): Plugin {
               return `/uploads/${encodeURIComponent(name)}`
             } catch { return s }
           }) : out)
-        } catch (err) { json(res, 500, { error: err instanceof Error ? err.message : 'unreadable' }) }
+        }).catch(err => { json(res, 500, { error: err instanceof Error ? err.message : 'unreadable' }) })
       })
     },
   }
