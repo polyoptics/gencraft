@@ -9,11 +9,13 @@
 
 import type { BoardData, ProjectGroup } from '../store/boardsStore'
 import { boundsOf } from '../store/canvasStore'
+import { isShut } from './deckTree'
 
 type Box = { x: number; y: number; w: number; h: number }
 const GAP = 12 // the gap cards keep between them (utils/nlePush DEFAULT_GAP)
 
-const isClosed = (g: ProjectGroup) => !!g.deckState && g.deckState !== 'open'
+/** (utils/deckTree: the one test for a card closed up.) */
+const isClosed = isShut
 
 /** How far the cards `comers` (about to close onto the closed deck `anchor`
  *  fronts) move to clear where that deck's own cards open (null: they are

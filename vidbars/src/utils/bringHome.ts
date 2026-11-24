@@ -24,7 +24,7 @@ import { faceBlocks } from './cardGrid'
 import { detailShown, newDetailId, type CardDetail } from './cardTypes'
 import { getMediaItems } from '../types/bar'
 import { modelOfCard } from './area3dScene'
-import { putAwayUnder } from './deckTree'
+import { putAwayUnder, isShut } from './deckTree'
 
 const TOUCH_GAP = 8
 
@@ -81,7 +81,7 @@ export function bringHome(sourceId: string, madeIds: string[], opts: { detail?: 
   // a small closed deck of the two, where it stands, also inside a bigger
   // deck, open or closed. Nothing else moves and no lock is touched: the
   // made card is simply held by the locks its card is held by.
-  const shut = (g: ProjectGroup | undefined) => !!g?.deckState && g.deckState !== 'open'
+  const shut = isShut
   const inner = putAwayUnder(source.id, bs().groups).map(g => g.id)
   const mine = rectOf(source.id)
   if (mine) {

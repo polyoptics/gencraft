@@ -11,8 +11,10 @@
 
 import type { ProjectGroup } from '../store/boardsStore'
 import { primaryFirst } from './primaryCard'
+import { isShut } from './deckTree'
 
-const isClosed = (g: ProjectGroup) => !!g.deckState && g.deckState !== 'open'
+/** (utils/deckTree: the one test for a card closed up.) */
+const isClosed = isShut
 
 /** Row `ids` about to close: the open decks in it other than its primary
  *  card's own (each its front first), and the row without their other

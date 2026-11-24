@@ -14,8 +14,10 @@ import { isUndoRestoring } from '../store/undoCoordinator'
 import { cardsTouch, isHiddenDeckMember } from '../hooks/useCardDecks'
 import { primaryFirst } from './primaryCard'
 import { keptDeck } from './deckLock'
+import { isShut } from './deckTree'
 
-const closed = (g: ProjectGroup | undefined) => !!g?.deckState && g.deckState !== 'open'
+/** (utils/deckTree: the one test for a card closed up.) */
+const closed = isShut
 
 export function startDeckUnder(): () => void {
   let busy = false

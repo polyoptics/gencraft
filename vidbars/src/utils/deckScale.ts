@@ -18,6 +18,7 @@
 // card, exactly as when one card is resized.
 
 import type { ProjectGroup } from '../store/boardsStore'
+import { isShut } from './deckTree'
 
 /** A card's face as it stands: where its top-left lies from its own origin,
  *  its size, and the size of what it holds (its floor). Canvas units. */
@@ -33,7 +34,8 @@ export interface DeckScaleStart {
   max: number
 }
 
-const shut = (g: ProjectGroup) => !!g.deckState && g.deckState !== 'open'
+/** (utils/deckTree: the one test for a card closed up.) */
+const shut = isShut
 
 /** The closed deck `frontId` fronts, ready to scale (null: not one). `box`
  *  gives a card's face (null: it has none). */

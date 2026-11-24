@@ -8,6 +8,7 @@
 // while two or more cards carry it, or a card carries its own.
 
 import type { ProjectGroup } from '../store/boardsStore'
+import { isShut } from './deckTree'
 
 /** The locks that hold: carried by two or more cards, or a card's lock of
  *  its own (a single card locked with its chain on a storyline: it joins
@@ -53,7 +54,8 @@ export function keepOf(g: ProjectGroup | undefined, groups: ProjectGroup[]): str
 }
 
 type Touch = (a: ProjectGroup, b: ProjectGroup) => boolean
-const shut = (g: ProjectGroup) => !!g.deckState && g.deckState !== 'open'
+/** (utils/deckTree: the one test for a card closed up.) */
+const shut = isShut
 
 /** The kept deck `k` as it stands, its front card first (null: none).
  *  Contact decides, as for every deck, and no card of it is special

@@ -11,7 +11,7 @@
 // With two in one row, the leftmost of them.
 
 import type { ProjectGroup } from '../store/boardsStore'
-import { putAwayUnder } from './deckTree'
+import { putAwayUnder, isShut } from './deckTree'
 
 /** Each card's row of touching cards as the canvas last drew it, its
  *  primary card first (CardLayer keeps it; rows with controls only). */
@@ -43,7 +43,8 @@ export function openDeckOf(id: string): string[] {
   return r && r[0] === id ? r.slice(1) : []
 }
 
-const isClosed = (g: ProjectGroup) => !!g.deckState && g.deckState !== 'open'
+/** (utils/deckTree: the one test for a card closed up.) */
+const isClosed = isShut
 
 /** `ids` (a row, or a deck's cards, leftmost first) with the card they
  *  close onto first: an existing deck's own front card when `ids` hold all

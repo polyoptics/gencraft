@@ -9,7 +9,7 @@ import { useFreeNodeStore } from '../store/freeNodeStore'
 import { expandWithNestedMembers, isHiddenDeckMember } from '../hooks/useCardDecks'
 import { rowOf } from './primaryCard'
 import { downstream } from './storyline'
-import { putAwayUnder } from './deckTree'
+import { putAwayUnder, isShut } from './deckTree'
 
 /** The card `c` is shown as: itself, or, hidden in a closed deck, that
  *  deck's front card. */
@@ -23,7 +23,8 @@ export function shownAs(c: string, byId: Map<string, ProjectGroup>): string {
   return id
 }
 
-const isClosedDeck = (g: ProjectGroup | undefined) => !!g && !!g.deckState && g.deckState !== 'open'
+/** (utils/deckTree: the one test for a card closed up.) */
+const isClosedDeck = isShut
 
 /** The decks on base dot `dotId`'s chain (the dot and every dot hanging off
  *  it, utils/storyline downstream): each closed deck a linked card is in or

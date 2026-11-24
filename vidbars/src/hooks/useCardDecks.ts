@@ -10,11 +10,12 @@ import { DEFAULT_H } from '../utils/barConstants'
 import { nearer } from '../utils/deckAway'
 import { primaryFirst } from '../utils/primaryCard'
 import { liveLocks, lockOf } from '../utils/deckLock'
+import { isPutAway } from '../utils/deckTree'
 import { NLE_HEADER_CANVAS_H, CARD_FLOOR_ZOOM } from '../components/NLE/NLETimelineHeader'
 
 /** Returns true if this group is a non-anchor member of a stacked/fanned deck (visually hidden). */
 export function isHiddenDeckMember(g: ProjectGroup): boolean {
-  return !!(g.deckState && g.deckState !== 'open' && g.deckAnchorId && g.deckAnchorId !== g.id)
+  return isPutAway(g)
 }
 
 /** Returns true if this group is an anchor of a sub-deck (other non-open groups point to it via deckAnchorId). */

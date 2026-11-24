@@ -13,9 +13,11 @@ import { useBoardsStore, type BoardData, type ProjectGroup } from '../store/boar
 import { boundsOf } from '../store/canvasStore'
 import { useFreeNodeStore, type FreeNodeData } from '../store/freeNodeStore'
 import { linkedLines, lyingLeft } from './deckAway'
+import { isShut } from './deckTree'
 
 const ONCE_KEY = 'vidbars.decksOpenRight.v1'
-const isClosed = (g: ProjectGroup) => !!g.deckState && g.deckState !== 'open'
+/** (utils/deckTree: the one test for a card closed up.) */
+const isClosed = isShut
 
 let linkedOf: { nodes: Record<string, FreeNodeData> | null; ids: Set<string> } = { nodes: null, ids: new Set() }
 /** Every card linked to a storyline dot. */

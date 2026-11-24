@@ -12,6 +12,7 @@ import type { BoardData, ProjectGroup } from '../store/boardsStore'
 import { boundsOf } from '../store/canvasStore'
 import type { FreeNodeData } from '../store/freeNodeStore'
 import { neighbours } from './storyline'
+import { isShut } from './deckTree'
 
 type Box = { x: number; y: number; w: number; h: number }
 /** A card's origin. */
@@ -65,7 +66,8 @@ export function storyLinksKey(nodes: Record<string, FreeNodeData>): string {
   return out
 }
 
-const isClosed = (g: ProjectGroup) => !!g.deckState && g.deckState !== 'open'
+/** (utils/deckTree: the one test for a card closed up.) */
+const isClosed = isShut
 
 /** Cards that all lie left of their front card (by their offsets from it):
  *  some to its left, none to its right. */

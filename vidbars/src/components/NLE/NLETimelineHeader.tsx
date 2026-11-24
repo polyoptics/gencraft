@@ -1,4 +1,5 @@
 import React, { useMemo, useState, useRef, useCallback, useSyncExternalStore } from 'react'
+import { isShut } from '../../utils/deckTree'
 import { withLockMates, keptDeck } from '../../utils/deckLock'
 import { wheelCanvas } from '../../utils/trackpad'
 import { BackRefDot } from '../Linking/BackRefDot'
@@ -146,7 +147,7 @@ const NLETimelineHeaderInner: React.FC<Props> = ({ groupId, rightInset = 0, left
     if (!deck || !me) return false
     // A closed deck inside an open kept deck: its lock is its own, and
     // that is off (a press keeps just its cards).
-    const shut = (g: typeof me) => !!g.deckState && g.deckState !== 'open'
+    const shut = isShut
     return !(shut(me) && deck[0].id !== groupId && deck.some(g => !shut(g)))
   })
   // A scene card: its view modes (Focus, Bump-outs, Trace) from a "⋯" here.

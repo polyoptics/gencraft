@@ -22,6 +22,7 @@ import { rowOf } from './primaryCard'
 import { makeLinkedCard, masterOf } from './linkedCards'
 import { createCardOrBoardAt } from './canvasCreate'
 import { newDetailId } from './cardTypes'
+import { isShut } from './deckTree'
 
 export interface CardState {
   id: string
@@ -50,7 +51,8 @@ export interface StateMachine {
 
 export const emptyStates = (): StateMachine => ({ states: [], changes: [] })
 
-const closed = (g: ProjectGroup | undefined) => !!g?.deckState && g.deckState !== 'open'
+/** (utils/deckTree: the one test for a card closed up.) */
+const closed = isShut
 /** Gap between cards of a row so they touch (useCardDecks TOUCH_TOLERANCE 16). */
 const TOUCH_GAP = 8
 
